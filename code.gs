@@ -207,6 +207,24 @@ function normalizeProblem_(problem) {
     (parsedFromExpression ? parsedFromExpression.answer : '')
   );
 
+  // Fallbacks: try operands array or nested question object if first/second/answer are still empty
+  if (first === '' || second === '' || answer === '') {
+    var ops = problem && (problem.operands || problem.args || problem.values);
+    if (Array.isArray(ops) && ops.length >= 2) {
+      if (first === '') first = toNumber_(ops[0]);
+      if (second === '') second = toNumber_(ops[1]);
+    }
+  }
+  if (first === '' || second === '' || answer === '') {
+    var qObj = problem && problem.question;
+    if (qObj && typeof qObj === 'object') {
+      if (first === '') first = toNumber_(qObj.first ?? qObj.a ?? qObj.left ?? qObj.lhs ?? qObj.value1 ?? qObj.num1);
+      if (second === '') second = toNumber_(qObj.second ?? qObj.b ?? qObj.right ?? qObj.rhs ?? qObj.value2 ?? qObj.num2);
+      if (answer === '') answer = toNumber_(qObj.answer ?? qObj.c ?? qObj.result ?? qObj.solution);
+      if (!operation) operation = normalizeOperationSymbol_(qObj.op ?? qObj.operator ?? qObj.symbol ?? qObj.sign);
+    }
+  }
+
   // If operation not specified, try to infer from provided numbers
   if (!operation) {
     if (isFiniteNumber_(first) && isFiniteNumber_(second) && isFiniteNumber_(answer)) {
@@ -269,8 +287,9 @@ function extractFromProblemGuess_(rawProblem) {
     var hasDirectFields = (rawProblem.a !== undefined || rawProblem.first !== undefined || rawProblem.value1 !== undefined ||
       rawProblem.b !== undefined || rawProblem.second !== undefined || rawProblem.value2 !== undefined ||
       rawProblem.answer !== undefined || rawProblem.result !== undefined || rawProblem.solution !== undefined || rawProblem.c !== undefined);
-    var hasOperationField = (rawProblem.operation || rawProblem.op || rawProblem.type || rawProblem.symbol || rawProblem.operator);
-    if (hasDirectFields || hasOperationField) {
+    // Only skip parsing if numeric-like fields are present. The presence of an operation field
+    // alone should not prevent us from attempting to parse an expression from text.
+    if (hasDirectFields) {
       return null; // let normalizeProblem_ read fields directly
     }
   }
@@ -287,6 +306,41 @@ function extractFromProblemGuess_(rawProblem) {
     }
   } else if (rawProblem && typeof rawProblem === 'object') {
     exprCandidate = rawProblem.expr || rawProblem.expression || rawProblem.question || rawProblem.text || rawProblem.q || null;
+    // If there is a tokens-like array, attempt to build an expression from it
+    if (!exprCandidate) {
+      var tokens = rawProblem.tokens || rawProblem.parts || rawProblem.words || null;
+      if (Array.isArray(tokens)) {
+        try {
+          exprCandidate = tokens.join(' ');
+        } catch (e2) {
+          exprCandidate = null;
+        }
+      }
+    }
+    // If there is an operands + operator shape, construct a parsed object directly
+    if (!exprCandidate) {
+      var opsArr = rawProblem.operands || rawProblem.args || rawProblem.values || null;
+      var opSym = rawProblem.operator || rawProblem.op || rawProblem.symbol || rawProblem.sign || null;
+      if (Array.isArray(opsArr) && opsArr.length >= 2 && opSym) {
+        var firstVal = toNumber_(opsArr[0]);
+        var secondVal = toNumber_(opsArr[1]);
+        var normOp = normalizeOperationSymbol_(opSym);
+        if (isFiniteNumber_(firstVal) && isFiniteNumber_(secondVal)) {
+          return { operation: normOp, first: firstVal, second: secondVal, answer: '' };
+        }
+      }
+    }
+    // If there is a nested question object with fields, use those
+    if (!exprCandidate && rawProblem.question && typeof rawProblem.question === 'object') {
+      var q = rawProblem.question;
+      var qFirst = toNumber_(q.first ?? q.a ?? q.left ?? q.lhs ?? q.value1 ?? q.num1);
+      var qSecond = toNumber_(q.second ?? q.b ?? q.right ?? q.rhs ?? q.value2 ?? q.num2);
+      var qAnswer = toNumber_(q.answer ?? q.c ?? q.result ?? q.solution);
+      var qOp = normalizeOperationSymbol_(q.op ?? q.operator ?? q.symbol ?? q.sign);
+      if (isFiniteNumber_(qFirst) && isFiniteNumber_(qSecond)) {
+        return { operation: qOp || '', first: qFirst, second: qSecond, answer: qAnswer };
+      }
+    }
   }
 
   if (!exprCandidate) return null;
