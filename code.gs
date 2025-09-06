@@ -180,23 +180,32 @@ function ensureProblemsHeaders_(sheet) {
 }
 
 function normalizeProblem_(problem) {
+  // Allow flexible inputs: objects, strings, or token arrays
+  var parsedFromExpression = extractFromProblemGuess_(problem);
+
   var operation = normalizeOperationSymbol_(
-    problem.operation || problem.op || problem.type || problem.symbol ||
-    problem.operator || problem.operationType || problem.category || problem.kind || problem.sign || ''
+    (problem && (problem.operation || problem.op || problem.type || problem.symbol ||
+    problem.operator || problem.operationType || problem.category || problem.kind || problem.sign)) ||
+    (parsedFromExpression && parsedFromExpression.operation) || ''
   );
 
   // Support common field aliases for the two given values and any provided answer
   var first = toNumber_(
-    problem.a ?? problem.first ?? problem.value1 ?? problem.firstValue ?? problem.num1 ??
+    (problem && (problem.a ?? problem.first ?? problem.value1 ?? problem.firstValue ?? problem.num1 ??
     problem.x ?? problem.left ?? problem.lhs ?? problem.leftValue ??
-    problem.minuend ?? problem.dividend ?? problem.start ?? problem.initial
+    problem.minuend ?? problem.dividend ?? problem.start ?? problem.initial)) ??
+    (parsedFromExpression ? parsedFromExpression.first : '')
   );
   var second = toNumber_(
-    problem.b ?? problem.second ?? problem.value2 ?? problem.secondValue ?? problem.num2 ??
+    (problem && (problem.b ?? problem.second ?? problem.value2 ?? problem.secondValue ?? problem.num2 ??
     problem.y ?? problem.right ?? problem.rhs ?? problem.rightValue ??
-    problem.subtrahend ?? problem.divisor ?? problem.next
+    problem.subtrahend ?? problem.divisor ?? problem.next)) ??
+    (parsedFromExpression ? parsedFromExpression.second : '')
   );
-  var answer = toNumber_(problem.answer ?? problem.result ?? problem.solution ?? problem.c ?? problem.outcome);
+  var answer = toNumber_(
+    (problem && (problem.answer ?? problem.result ?? problem.solution ?? problem.c ?? problem.outcome)) ??
+    (parsedFromExpression ? parsedFromExpression.answer : '')
+  );
 
   // If operation not specified, try to infer from provided numbers
   if (!operation) {
@@ -251,6 +260,92 @@ function normalizeProblem_(problem) {
     b: isFiniteNumber_(b) ? b : '',
     c: isFiniteNumber_(c) ? c : ''
   };
+}
+
+// Best-effort extractor to handle strings, arrays, or text-bearing objects
+function extractFromProblemGuess_(rawProblem) {
+  // If already a well-formed object with numeric-like fields, skip heavy parsing
+  if (rawProblem && typeof rawProblem === 'object' && !Array.isArray(rawProblem)) {
+    var hasDirectFields = (rawProblem.a !== undefined || rawProblem.first !== undefined || rawProblem.value1 !== undefined ||
+      rawProblem.b !== undefined || rawProblem.second !== undefined || rawProblem.value2 !== undefined ||
+      rawProblem.answer !== undefined || rawProblem.result !== undefined || rawProblem.solution !== undefined || rawProblem.c !== undefined);
+    var hasOperationField = (rawProblem.operation || rawProblem.op || rawProblem.type || rawProblem.symbol || rawProblem.operator);
+    if (hasDirectFields || hasOperationField) {
+      return null; // let normalizeProblem_ read fields directly
+    }
+  }
+
+  // Try to obtain an expression string from various shapes
+  var exprCandidate = null;
+  if (typeof rawProblem === 'string' || typeof rawProblem === 'number') {
+    exprCandidate = String(rawProblem);
+  } else if (Array.isArray(rawProblem)) {
+    try {
+      exprCandidate = rawProblem.join(' ');
+    } catch (e) {
+      exprCandidate = null;
+    }
+  } else if (rawProblem && typeof rawProblem === 'object') {
+    exprCandidate = rawProblem.expr || rawProblem.expression || rawProblem.question || rawProblem.text || rawProblem.q || null;
+  }
+
+  if (!exprCandidate) return null;
+  var parsed = parseExpression_(exprCandidate);
+  return parsed;
+}
+
+function parseExpression_(rawExpr) {
+  var s = String(rawExpr || '').trim();
+  if (!s) return null;
+
+  // Normalize unicode and tokens
+  var normalized = s
+    .replace(/[×xX]/g, '*')
+    .replace(/[÷]/g, '/')
+    .replace(/[−–—]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Patterns like: a op b = c  OR  a op b
+  var m1 = normalized.match(/^(-?\d+(?:\.\d+)?)\s*([+\-*/])\s*(-?\d+(?:\.\d+)?)(?:\s*=\s*(-?\d+(?:\.\d+)?))?$/);
+  if (m1) {
+    var first = Number(m1[1]);
+    var op = m1[2];
+    var second = Number(m1[3]);
+    var ans = m1[4] !== undefined ? Number(m1[4]) : '';
+    return { operation: normalizeOperationSymbol_(op), first: first, second: second, answer: ans };
+  }
+
+  // Pattern like: c = a op b
+  var m2 = normalized.match(/^(-?\d+(?:\.\d+)?)\s*=\s*(-?\d+(?:\.\d+)?)\s*([+\-*/])\s*(-?\d+(?:\.\d+)?)$/);
+  if (m2) {
+    var cVal = Number(m2[1]);
+    var aVal = Number(m2[2]);
+    var op2 = m2[3];
+    var bVal = Number(m2[4]);
+    // Map to first/second/answer: for sub/div we expect first=c, second=a
+    return { operation: normalizeOperationSymbol_(op2), first: aVal, second: bVal, answer: cVal };
+  }
+
+  // Words: plus | minus | times | divided by
+  var wordy = normalized.toLowerCase();
+  var wordMatch = wordy.match(/^(-?\d+(?:\.\d+)?)\s*(plus|minus|times|multiplied by|divided by)\s*(-?\d+(?:\.\d+)?)(?:\s*=\s*(-?\d+(?:\.\d+)?))?$/);
+  if (wordMatch) {
+    var aNum = Number(wordMatch[1]);
+    var opWord = wordMatch[2];
+    var bNum = Number(wordMatch[3]);
+    var ansWord = wordMatch[4] !== undefined ? Number(wordMatch[4]) : '';
+    var opNorm = (function(w){
+      if (w === 'plus') return 'add';
+      if (w === 'minus') return 'sub';
+      if (w === 'times' || w === 'multiplied by') return 'mul';
+      if (w === 'divided by') return 'div';
+      return '';
+    })(opWord);
+    return { operation: opNorm, first: aNum, second: bNum, answer: ansWord };
+  }
+
+  return null;
 }
 
 function normalizeOperationSymbol_(raw) {
