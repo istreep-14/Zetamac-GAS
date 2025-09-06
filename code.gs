@@ -181,22 +181,42 @@ function ensureProblemsHeaders_(sheet) {
 
 function normalizeProblem_(problem) {
   var operation = normalizeOperationSymbol_(
-    problem.operation || problem.op || problem.type || problem.symbol || ''
+    problem.operation || problem.op || problem.type || problem.symbol ||
+    problem.operator || problem.operationType || problem.category || problem.kind || problem.sign || ''
   );
 
-  // Support common field aliases
+  // Support common field aliases for the two given values and any provided answer
   var first = toNumber_(
-    problem.a ?? problem.first ?? problem.x ?? problem.left ??
-    problem.minuend ?? problem.dividend
+    problem.a ?? problem.first ?? problem.value1 ?? problem.firstValue ?? problem.num1 ??
+    problem.x ?? problem.left ?? problem.lhs ?? problem.leftValue ??
+    problem.minuend ?? problem.dividend ?? problem.start ?? problem.initial
   );
   var second = toNumber_(
-    problem.b ?? problem.second ?? problem.y ?? problem.right ??
-    problem.subtrahend ?? problem.divisor
+    problem.b ?? problem.second ?? problem.value2 ?? problem.secondValue ?? problem.num2 ??
+    problem.y ?? problem.right ?? problem.rhs ?? problem.rightValue ??
+    problem.subtrahend ?? problem.divisor ?? problem.next
   );
-  var answer = toNumber_(problem.answer ?? problem.result ?? problem.solution);
+  var answer = toNumber_(problem.answer ?? problem.result ?? problem.solution ?? problem.c ?? problem.outcome);
+
+  // If operation not specified, try to infer from provided numbers
+  if (!operation) {
+    if (isFiniteNumber_(first) && isFiniteNumber_(second) && isFiniteNumber_(answer)) {
+      if (first + second === answer) {
+        operation = 'add';
+      } else if (first * second === answer) {
+        operation = 'mul';
+      } else if (first - second === answer) {
+        operation = 'sub';
+      } else if (second !== 0 && first / second === answer) {
+        operation = 'div';
+      }
+    }
+  }
+  if (!operation) operation = 'add';
 
   var a = null, b = null, c = null;
   if (operation === 'add' || operation === 'mul') {
+    // For addition/multiplication: first value is a, second is b, derived answer is c
     a = first;
     b = second;
     if (operation === 'add') {
@@ -205,7 +225,7 @@ function normalizeProblem_(problem) {
       c = isFiniteNumber_(a) && isFiniteNumber_(b) ? (a * b) : '';
     }
   } else if (operation === 'sub' || operation === 'div') {
-    // For subtraction/division: second value is a, c is the initial value, b is the answer
+    // For subtraction/division: first value is c, second value is a, derived answer is b
     a = second;
     c = first;
     if (isFiniteNumber_(c) && isFiniteNumber_(a)) {
@@ -218,10 +238,11 @@ function normalizeProblem_(problem) {
       b = isFiniteNumber_(answer) ? answer : '';
     }
   } else {
-    // Unknown operation, best-effort mapping: keep a/b as given, compute c if possible as a+b
+    // Unknown operation, best-effort mapping: follow addition-style mapping
     a = first;
-    b = isFiniteNumber_(answer) ? answer : second;
+    b = second;
     c = isFiniteNumber_(a) && isFiniteNumber_(b) ? (a + b) : '';
+    operation = 'add';
   }
 
   return {
@@ -238,7 +259,7 @@ function normalizeOperationSymbol_(raw) {
   if (s === '-' || s === 'sub' || s === 'subtract' || s === 'subtraction') return 'sub';
   if (s === '*' || s === 'x' || s === '×' || s === 'mul' || s === 'multiply' || s === 'multiplication') return 'mul';
   if (s === '/' || s === '÷' || s === 'div' || s === 'divide' || s === 'division') return 'div';
-  return s || 'add';
+  return s;
 }
 
 function toNumber_(value) {
