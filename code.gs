@@ -269,8 +269,9 @@ function extractFromProblemGuess_(rawProblem) {
     var hasDirectFields = (rawProblem.a !== undefined || rawProblem.first !== undefined || rawProblem.value1 !== undefined ||
       rawProblem.b !== undefined || rawProblem.second !== undefined || rawProblem.value2 !== undefined ||
       rawProblem.answer !== undefined || rawProblem.result !== undefined || rawProblem.solution !== undefined || rawProblem.c !== undefined);
-    var hasOperationField = (rawProblem.operation || rawProblem.op || rawProblem.type || rawProblem.symbol || rawProblem.operator);
-    if (hasDirectFields || hasOperationField) {
+    // Only skip parsing if numeric-like fields are present. The presence of an operation field
+    // alone should not prevent us from attempting to parse an expression from text.
+    if (hasDirectFields) {
       return null; // let normalizeProblem_ read fields directly
     }
   }
@@ -287,6 +288,17 @@ function extractFromProblemGuess_(rawProblem) {
     }
   } else if (rawProblem && typeof rawProblem === 'object') {
     exprCandidate = rawProblem.expr || rawProblem.expression || rawProblem.question || rawProblem.text || rawProblem.q || null;
+    // If there is a tokens-like array, attempt to build an expression from it
+    if (!exprCandidate) {
+      var tokens = rawProblem.tokens || rawProblem.parts || rawProblem.words || null;
+      if (Array.isArray(tokens)) {
+        try {
+          exprCandidate = tokens.join(' ');
+        } catch (e2) {
+          exprCandidate = null;
+        }
+      }
+    }
   }
 
   if (!exprCandidate) return null;
