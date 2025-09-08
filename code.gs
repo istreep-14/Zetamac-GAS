@@ -18,45 +18,70 @@ function extractKeyFromUrl(url) {
 }
 
 function doPost(e) {
-  const data = JSON.parse(e.postData.contents);
-  const ss = SpreadsheetApp.getActive();
-  const sessionsSheet = ss.getSheetByName('Sessions') || ss.insertSheet('Sessions');
+  try {
+    if (!e || !e.postData || !e.postData.contents) {
+      return ContentService.createTextOutput('missing body').setMimeType(ContentService.MimeType.TEXT);
+    }
 
-  ensureSessionsHeaders_(sessionsSheet);
+    var data;
+    try {
+      data = JSON.parse(e.postData.contents);
+    } catch (parseErr) {
+      return ContentService.createTextOutput('invalid json').setMimeType(ContentService.MimeType.TEXT);
+    }
 
-  const url = data.url || '';
-  const key = extractKeyFromUrl(url);
-  const mapping = KEY_TO_MODE_AND_DURATION[key] || null;
-  const detectedMode = mapping ? mapping.mode : '';
-  const mappedDuration = mapping ? mapping.duration : '';
+    if (!data || typeof data !== 'object') {
+      return ContentService.createTextOutput('invalid payload').setMimeType(ContentService.MimeType.TEXT);
+    }
 
-  sessionsSheet.appendRow([
-    new Date(),
-    data.clientId || '',
-    url,
-    data.duration || '',
-    data.score || '',
-    JSON.stringify(data.problems || []),
-    detectedMode,
-    mappedDuration,
-  ]);
+    if (!Array.isArray(data.problems)) {
+      data.problems = [];
+    }
 
-  const newRow = sessionsSheet.getLastRow();
-  const score120Cell = sessionsSheet.getRange(newRow, 9); // I column
-  score120Cell.setFormula('=IFERROR((E' + newRow + '/D' + newRow + ')*120, "")');
+    const ss = SpreadsheetApp.getActive();
+    const sessionsSheet = ss.getSheetByName('Sessions') || ss.insertSheet('Sessions');
 
-  ensureScore120Formulas_(sessionsSheet);
-  appendProblemsRows_(ss, data, {
-    timestamp: sessionsSheet.getRange(newRow, 1).getValue(),
-    clientId: data.clientId || '',
-    url: url,
-    detectedMode: detectedMode,
-    mappedDuration: mappedDuration,
-    duration: data.duration || '',
-    score: data.score || ''
-  });
+    ensureSessionsHeaders_(sessionsSheet);
 
-  return ContentService.createTextOutput('ok').setMimeType(ContentService.MimeType.TEXT);
+    const url = data.url || '';
+    const key = extractKeyFromUrl(url);
+    const mapping = KEY_TO_MODE_AND_DURATION[key] || null;
+    const detectedMode = mapping ? mapping.mode : '';
+    const mappedDuration = mapping ? mapping.duration : '';
+
+    sessionsSheet.appendRow([
+      new Date(),
+      data.clientId || '',
+      url,
+      data.duration || '',
+      data.score || '',
+      JSON.stringify(data.problems || []),
+      detectedMode,
+      mappedDuration,
+    ]);
+
+    const newRow = sessionsSheet.getLastRow();
+    const score120Cell = sessionsSheet.getRange(newRow, 9); // I column
+    score120Cell.setFormula('=IFERROR((E' + newRow + '/D' + newRow + ')*120, "")');
+
+    ensureScore120Formulas_(sessionsSheet);
+    appendProblemsRows_(ss, data, {
+      timestamp: sessionsSheet.getRange(newRow, 1).getValue(),
+      clientId: data.clientId || '',
+      url: url,
+      detectedMode: detectedMode,
+      mappedDuration: mappedDuration,
+      duration: data.duration || '',
+      score: data.score || ''
+    });
+
+    return ContentService.createTextOutput('ok').setMimeType(ContentService.MimeType.TEXT);
+  } catch (err) {
+    try {
+      console.error(err);
+    } catch (_) {}
+    return ContentService.createTextOutput('error').setMimeType(ContentService.MimeType.TEXT);
+  }
 }
 
 function ensureSessionsHeaders_(sheet) {
@@ -241,35 +266,21 @@ function normalizeProblem_(problem) {
   }
   if (!operation) operation = 'add';
 
-  var a = null, b = null, c = null;
-  if (operation === 'add' || operation === 'mul') {
-    // For addition/multiplication: first value is a, second is b, derived answer is c
-    a = first;
-    b = second;
+  // Unify mapping: always a op b = c
+  var a = first;
+  var b = second;
+  var c = answer;
+
+  if (c === '' && isFiniteNumber_(a) && isFiniteNumber_(b)) {
     if (operation === 'add') {
-      c = isFiniteNumber_(a) && isFiniteNumber_(b) ? (a + b) : '';
-    } else {
-      c = isFiniteNumber_(a) && isFiniteNumber_(b) ? (a * b) : '';
+      c = a + b;
+    } else if (operation === 'sub') {
+      c = a - b;
+    } else if (operation === 'mul') {
+      c = a * b;
+    } else if (operation === 'div') {
+      c = b === 0 ? '' : (a / b);
     }
-  } else if (operation === 'sub' || operation === 'div') {
-    // For subtraction/division: first value is c, second value is a, derived answer is b
-    a = second;
-    c = first;
-    if (isFiniteNumber_(c) && isFiniteNumber_(a)) {
-      if (operation === 'sub') {
-        b = c - a;
-      } else {
-        b = a === 0 ? '' : (c / a);
-      }
-    } else {
-      b = isFiniteNumber_(answer) ? answer : '';
-    }
-  } else {
-    // Unknown operation, best-effort mapping: follow addition-style mapping
-    a = first;
-    b = second;
-    c = isFiniteNumber_(a) && isFiniteNumber_(b) ? (a + b) : '';
-    operation = 'add';
   }
 
   return {
